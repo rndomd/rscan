@@ -1,16 +1,16 @@
 use libc::{
-    AF_INET, AF_INET6, AF_NETLINK, AF_UNSPEC, AI_PASSIVE, IFA_LOCAL, IFNAMSIZ, IPPROTO_ICMP,
+    AF_INET, AF_INET6, AF_NETLINK, AF_UNSPEC, IFA_LOCAL, IFNAMSIZ, IPPROTO_ICMP,
     NETLINK_ROUTE, NLM_F_DUMP, NLM_F_REQUEST, NLMSG_DONE, RTM_GETADDR, SO_RCVTIMEO, SOCK_DGRAM,
     SOCK_RAW, SOCK_STREAM, SOL_SOCKET, addrinfo, bind, getaddrinfo, gethostname, getpid,
-    if_indextoname, ifaddrmsg, in_addr, nlmsghdr, recv, recvfrom, rtattr, send, sendto, setsockopt,
-    sockaddr, sockaddr_in, sockaddr_in6, sockaddr_nl, sockaddr_storage, socket, socklen_t,
+    if_indextoname, ifaddrmsg, nlmsghdr, recv, recvfrom, rtattr, send, sendto, setsockopt,
+    sockaddr, sockaddr_in, sockaddr_nl, sockaddr_storage, socket, socklen_t,
     suseconds_t, time_t, timeval,
 };
 use std::{
     collections::HashMap,
-    ffi::{CStr, CString, c_char},
+    ffi::{CStr, c_char},
     mem,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr },
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         raw::{c_int, c_void},
@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-use crate::models::{DiscoverError, Host, NetworkInterface, Subnet, icmphdr};
+use crate::models::{DiscoverError, NetworkInterface, Subnet, icmphdr};
 use anyhow::{Context, Result};
 
 pub fn get_netw_addr() -> Result<HashMap<String, NetworkInterface>> {
