@@ -1,11 +1,16 @@
 use libc::{
-    AF_INET, AF_INET6, AF_NETLINK, AF_UNSPEC, IFA_LOCAL, IFNAMSIZ, IPPROTO_ICMP, NETLINK_ROUTE, NLM_F_DUMP, NLM_F_REQUEST, NLMSG_DONE, RTM_GETADDR, SO_RCVTIMEO, SOCK_DGRAM, SOCK_RAW, SOL_SOCKET, bind, getpid, if_indextoname, ifaddrmsg, in_addr, nlmsghdr, recv, recvfrom, rtattr, send, sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_nl, sockaddr_storage, socket, socklen_t, suseconds_t, time_t, timeval
+    AF_INET, AF_INET6, AF_NETLINK, AF_UNSPEC, AI_PASSIVE, IFA_LOCAL, IFNAMSIZ, IPPROTO_ICMP,
+    NETLINK_ROUTE, NLM_F_DUMP, NLM_F_REQUEST, NLMSG_DONE, RTM_GETADDR, SO_RCVTIMEO, SOCK_DGRAM,
+    SOCK_RAW, SOCK_STREAM, SOL_SOCKET, addrinfo, bind, getaddrinfo, gethostname, getpid,
+    if_indextoname, ifaddrmsg, in_addr, nlmsghdr, recv, recvfrom, rtattr, send, sendto, setsockopt,
+    sockaddr, sockaddr_in, sockaddr_in6, sockaddr_nl, sockaddr_storage, socket, socklen_t,
+    suseconds_t, time_t, timeval,
 };
 use std::{
     collections::HashMap,
-    ffi::{CStr, c_char},
+    ffi::{CStr, CString, c_char},
     mem,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         raw::{c_int, c_void},
@@ -13,12 +18,12 @@ use std::{
     time::Duration,
 };
 
-use crate::models::{Device, DiscoverError, NetworkInterface, Subnet, icmphdr};
+use crate::models::{DiscoverError, Host, NetworkInterface, Subnet, icmphdr};
 use anyhow::{Context, Result};
 
 pub fn get_netw_addr() -> Result<HashMap<String, NetworkInterface>> {
-    let sockfd_nl: OwnedFd =
-        open_socket(AF_NETLINK, SOCK_RAW,NETLINK_ROUTE).context("failed to open route table socket")?;
+    let sockfd_nl: OwnedFd = open_socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE)
+        .context("failed to open route table socket")?;
     let saddr = create_nl_sockaddr();
     bind_socket(
         sockfd_nl.as_raw_fd(),
@@ -34,7 +39,7 @@ pub fn get_netw_addr() -> Result<HashMap<String, NetworkInterface>> {
 
 pub fn ping_local_ip(ip: Ipv4Addr) -> Result<Option<Ipv4Addr>, anyhow::Error> {
     let sockfd: OwnedFd =
-        open_socket(AF_INET,SOCK_DGRAM, IPPROTO_ICMP).context("failed to open icmp socket")?;
+        open_socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP).context("failed to open icmp socket")?;
     let imsg = create_icmp_ping_message();
     send_ping(sockfd.as_raw_fd(), imsg, ip).context("failed to send icmp message")?;
     recv_ping(sockfd.as_raw_fd()).context("failed to retrieve ping reply")
@@ -337,4 +342,49 @@ fn create_icmp_ping_message() -> icmphdr {
 
     hdr.checksum = !(checksum as u16);
     hdr
+}
+
+pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
+    let mut name = [0 as c_char; 256];
+    let ret = unsafe { gethostname(name.as_mut_ptr(), name.len()) };
+    if ret != 0 {
+        return Err(DiscoverError::FailedToResolveHostname {
+            hostname: String::from("local"),
+        });
+    }
+    let mut hints: addrinfo = unsafe { mem::zeroed() };
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    let mut res: *mut addrinfo = std::ptr::null_mut();
+    let ret = unsafe { getaddrinfo(name.as_ptr(), std::ptr::null(), &hints, &mut res) };
+    if ret != 0 {
+        return Err(DiscoverError::NetworkInterfaceNotFound {
+            iface: unsafe { String::from(CStr::from_ptr(name.as_ptr()).to_string_lossy()) },
+        });
+    }
+    let mut curr = res;
+    while !curr.is_null() {
+        let addr_info = unsafe { &*curr };
+        if let Some(ip) = parse_addr_info(addr_info.ai_addr) {
+            return Ok(ip);
+        }
+        curr = addr_info.ai_next;
+    }
+    Err(DiscoverError::NetworkInterfaceNotFound {
+        iface: String::from("default"),
+    })
+}
+
+fn parse_addr_info(sockaddr: *const sockaddr) -> Option<Ipv4Addr> {
+    let family = unsafe { (*sockaddr).sa_family as i32 };
+    match family {
+        AF_INET => {
+            let sockaddr_in: sockaddr_in = unsafe { *(sockaddr as *const sockaddr_in) };
+            let ip = Ipv4Addr::from_bits(u32::from_be(sockaddr_in.sin_addr.s_addr));
+            Some(ip)
+        }
+
+        _ => None,
+    }
 }
