@@ -28,12 +28,6 @@ pub struct Subnet {
 
 #[derive(Debug, PartialEq)]
 pub struct NetworkInterface {
-    name: String,
-    subnets: Vec<Subnet>,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Host {
     pub ip: Ipv4Addr,
     pub subnet: Subnet,
 }
@@ -82,33 +76,6 @@ impl DerefMut for icmphdr {
                 std::mem::size_of::<icmphdr>(),
             )
         }
-    }
-}
-
-impl NetworkInterface {
-    pub fn new() -> Self {
-        NetworkInterface {
-            name: String::new(),
-            subnets: Vec::new(),
-        }
-    }
-
-    pub fn set_name(&mut self, name: &str) {
-        self.name = String::from(name);
-    }
-
-    pub fn get_name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn add_subnet(&mut self, subnet: Subnet) {
-        if !self.subnets.contains(&subnet) {
-            self.subnets.push(subnet);
-        }
-    }
-
-    pub fn get_subnets(&self) -> &Vec<Subnet> {
-        &self.subnets
     }
 }
 
@@ -164,15 +131,5 @@ impl Subnet {
 impl Display for Subnet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.ip, self.mask)
-    }
-}
-
-impl Display for NetworkInterface {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Name: {}, Subnets:", self.name)?;
-        for subnet in &self.subnets {
-            write!(f, " {}", subnet)?;
-        }
-        Ok(())
     }
 }

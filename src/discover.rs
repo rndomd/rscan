@@ -1,5 +1,5 @@
 use crate::models::{Device, Subnet};
-use crate::network::{get_netw_addr, ping_local_ip};
+use crate::network::{get_netw_addr, getaddr, ping_local_ip};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
@@ -8,20 +8,7 @@ pub fn scan_network(interface: String) -> Result<()> {
     let pb = progress_bar();
     pb.println(format!("{:<20} Device Type", "IP address"));
     if &interface == "default" {
-        let ifaces = get_netw_addr().context("failed to get routing table")?;
-        for iface in ifaces {
-            let subnet: &Subnet = &iface.1.get_subnets()[0];
-            for ip in subnet.get_subnet_ips() {
-                let res = ping_local_ip(ip).with_context(|| format!("failed to ping ip {}", ip))?;
-                if let Some(recv_ip) = res {
-                    let device = Device {
-                        ip: recv_ip.to_string(),
-                        device_type: String::from("unknown"),
-                    };
-                    output_found_device(&pb, &device);
-                }
-            }
-        }
+        let iface = get_netw_addr().context("failed to get routing table")?;
     }
     end_progress_bar(pb);
     Ok(())

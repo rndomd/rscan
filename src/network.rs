@@ -1,16 +1,16 @@
 use libc::{
-    AF_INET, AF_INET6, AF_NETLINK, AF_UNSPEC, IFA_LOCAL, IFNAMSIZ, IPPROTO_ICMP,
-    NETLINK_ROUTE, NLM_F_DUMP, NLM_F_REQUEST, NLMSG_DONE, RTM_GETADDR, SO_RCVTIMEO, SOCK_DGRAM,
-    SOCK_RAW, SOCK_STREAM, SOL_SOCKET, addrinfo, bind, getaddrinfo, gethostname, getpid,
-    if_indextoname, ifaddrmsg, nlmsghdr, recv, recvfrom, rtattr, send, sendto, setsockopt,
-    sockaddr, sockaddr_in, sockaddr_nl, sockaddr_storage, socket, socklen_t,
+    AF_INET, AF_INET6, AF_NETLINK, AF_UNSPEC, IFA_LOCAL, IFNAMSIZ, IPPROTO_ICMP, NETLINK_ROUTE,
+    NLM_F_DUMP, NLM_F_REQUEST, NLMSG_DONE, RTM_GETADDR, SO_RCVTIMEO, SOCK_DGRAM, SOCK_RAW,
+    SOCK_STREAM, SOL_SOCKET, addrinfo, bind, freeaddrinfo, freeifaddrs, getaddrinfo, gethostname,
+    getifaddrs, getpid, if_indextoname, ifaddrmsg, ifaddrs, nlmsghdr, recv, recvfrom, rtattr, send,
+    sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_nl, sockaddr_storage, socket, socklen_t,
     suseconds_t, time_t, timeval,
 };
 use std::{
     collections::HashMap,
     ffi::{CStr, c_char},
     mem,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr },
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         raw::{c_int, c_void},
@@ -21,20 +21,15 @@ use std::{
 use crate::models::{DiscoverError, NetworkInterface, Subnet, icmphdr};
 use anyhow::{Context, Result};
 
-pub fn get_netw_addr() -> Result<HashMap<String, NetworkInterface>> {
-    let sockfd_nl: OwnedFd = open_socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE)
-        .context("failed to open route table socket")?;
-    let saddr = create_nl_sockaddr();
-    bind_socket(
-        sockfd_nl.as_raw_fd(),
-        &saddr as *const sockaddr_nl as *const sockaddr,
-    )
-    .context("failed to bind route table socket")?;
-    let (rtmsg, nlh) = build_rtm_getaddr();
-    send_rtmsg(sockfd_nl.as_raw_fd(), rtmsg, nlh).context("failed to send rtmgetaddr message")?;
-    let iface =
-        recv_rtmsg(sockfd_nl.as_raw_fd()).context("failed to receive response from netlink")?;
-    Ok(iface)
+pub fn get_netw_addr() -> Result<NetworkInterface> {
+    let ntwif_ip = getaddr().context("failed to retrieve local ipv4 address")?;
+    let netmask = getaddr_netmask(ntwif_ip)
+        .with_context(|| format!("failed to fetch netmask for address {ntwif_ip}"))?;
+    println!("{ntwif_ip} {netmask}");
+    Ok(NetworkInterface {
+        ip: ntwif_ip,
+        subnet: Subnet::new(IpAddr::V4(ntwif_ip), netmask),
+    })
 }
 
 pub fn ping_local_ip(ip: Ipv4Addr) -> Result<Option<Ipv4Addr>, anyhow::Error> {
@@ -45,114 +40,109 @@ pub fn ping_local_ip(ip: Ipv4Addr) -> Result<Option<Ipv4Addr>, anyhow::Error> {
     recv_ping(sockfd.as_raw_fd()).context("failed to retrieve ping reply")
 }
 
-fn parse_rtaattr_data(
-    addr_msg: &ifaddrmsg,
-    buf: &[u8],
-    data_offset: &mut usize,
-    msg_end: usize,
-) -> Option<NetworkInterface> {
-    let mut found: bool = false;
-    let mut ntw_if = NetworkInterface::new();
-    while *data_offset + mem::size_of::<rtattr>() <= msg_end {
-        let rta = unsafe { &*(buf[*data_offset..].as_ptr() as *const rtattr) };
-        let attr_len = rta.rta_len as usize;
-        if attr_len < mem::size_of::<rtattr>() || *data_offset + attr_len > msg_end {
-            break;
-        }
-        let attr_data_start = *data_offset + mem::size_of::<rtattr>();
-        let attr_data_end = *data_offset + attr_len;
-        let attr_data = &buf[attr_data_start..attr_data_end];
-
-        match rta.rta_type {
-            IFA_LOCAL => match addr_msg.ifa_family as i32 {
-                AF_INET => {
-                    let addr = IpAddr::V4(Ipv4Addr::new(
-                        attr_data[0],
-                        attr_data[1],
-                        attr_data[2],
-                        attr_data[3],
-                    ));
-                    if !addr.is_loopback() {
-                        ntw_if.add_subnet(Subnet::new(addr, addr_msg.ifa_prefixlen));
-                        found = true;
-                    }
-                }
-                AF_INET6 => {
-                    let bytes: [u8; 16] = attr_data[..16].try_into().unwrap();
-                    let addr = IpAddr::V6(Ipv6Addr::from(bytes));
-                    if !addr.is_loopback() {
-                        ntw_if.add_subnet(Subnet::new(addr, addr_msg.ifa_prefixlen));
-                        found = true;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        *data_offset += (attr_len + 3) & !3;
-    }
-
-    if found {
-        let ifindex = u32::from_ne_bytes(addr_msg.ifa_index.to_ne_bytes());
-        let mut name = [0 as c_char; IFNAMSIZ];
-        unsafe {
-            if_indextoname(ifindex, name.as_mut_ptr());
-        }
-        let name = unsafe { CStr::from_ptr(name.as_ptr()) };
-        ntw_if.set_name(&name.to_string_lossy());
-
-        return Some(ntw_if);
-    } else {
-        return None;
-    }
-}
-
-fn recv_rtmsg(fd: RawFd) -> Result<HashMap<String, NetworkInterface>, DiscoverError> {
-    let mut interfaces: HashMap<String, NetworkInterface> = HashMap::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let received = unsafe { recv(fd, buf.as_mut_ptr() as *mut c_void, buf.len(), 0) };
-        if received < 0 {
-            return Err(DiscoverError::SocketError {
-                source: std::io::Error::last_os_error(),
-            });
-        }
-        if received == 0 {
-            break;
-        }
-
-        let mut offset = 0usize;
-
-        while offset < received as usize {
-            let hdr = unsafe { &*(buf[offset..].as_ptr() as *const nlmsghdr) };
-            if hdr.nlmsg_type == NLMSG_DONE as u16 {
-                return Ok(interfaces);
-            }
-            let msg_len = hdr.nlmsg_len as usize;
-            if msg_len < mem::size_of::<nlmsghdr>() || offset + msg_len > buf.len() {
-                break;
-            }
-
-            let msg_end = offset + msg_len;
-            let attrs_offset = offset + mem::size_of::<nlmsghdr>();
-            let mut data_offset = attrs_offset + mem::size_of::<ifaddrmsg>();
-            if data_offset > msg_end {
-                break;
-            }
-            let addr_msg = unsafe { &*(buf[attrs_offset..].as_ptr() as *const ifaddrmsg) };
-            if let Some(iface) = parse_rtaattr_data(addr_msg, &buf, &mut data_offset, msg_end) {
-                interfaces.insert(iface.get_name().to_string(), iface);
-            }
-            offset += (msg_len + 3) & !3;
-        }
-    }
-    if interfaces.is_empty() {
-        return Err(DiscoverError::NetworkInterfaceNotFound {
-            iface: "default".to_string(),
-        });
-    }
-    Ok(interfaces)
-}
+//fn parse_rtaattr_data(
+//    addr_msg: &ifaddrmsg,
+//    buf: &[u8],
+//    data_offset: &mut usize,
+//    msg_end: usize,
+//) -> Option<NetworkInterface> {
+//    let mut found: bool = false;
+//    while *data_offset + mem::size_of::<rtattr>() <= msg_end {
+//        let rta = unsafe { &*(buf[*data_offset..].as_ptr() as *const rtattr) };
+//        let attr_len = rta.rta_len as usize;
+//        if attr_len < mem::size_of::<rtattr>() || *data_offset + attr_len > msg_end {
+//            break;
+//        }
+//        let attr_data_start = *data_offset + mem::size_of::<rtattr>();
+//        let attr_data_end = *data_offset + attr_len;
+//        let attr_data = &buf[attr_data_start..attr_data_end];
+//
+//        match rta.rta_type {
+//            IFA_LOCAL => match addr_msg.ifa_family as i32 {
+//                AF_INET => {
+//                    let addr = IpAddr::V4(Ipv4Addr::new(
+//                        attr_data[0],
+//                        attr_data[1],
+//                        attr_data[2],
+//                        attr_data[3],
+//                    ));
+//                    if !addr.is_loopback() {
+//                        ntw_if.add_subnet(Subnet::new(addr, addr_msg.ifa_prefixlen));
+//                        found = true;
+//                    }
+//                }
+//                AF_INET6 => {
+//                    let bytes: [u8; 16] = attr_data[..16].try_into().unwrap();
+//                    let addr = IpAddr::V6(Ipv6Addr::from(bytes));
+//                    if !addr.is_loopback() {
+//                        ntw_if.add_subnet(Subnet::new(addr, addr_msg.ifa_prefixlen));
+//                        found = true;
+//                    }
+//                }
+//                _ => {}
+//            },
+//            _ => {}
+//        }
+//        *data_offset += (attr_len + 3) & !3;
+//    }
+//
+//    if found {
+//        let ifindex = u32::from_ne_bytes(addr_msg.ifa_index.to_ne_bytes());
+//        let mut name = [0 as c_char; IFNAMSIZ];
+//        unsafe {
+//            if_indextoname(ifindex, name.as_mut_ptr());
+//        }
+//        let name = unsafe { CStr::from_ptr(name.as_ptr()) };
+//        ntw_if.set_name(&name.to_string_lossy());
+//
+//        return Some(ntw_if);
+//    } else {
+//        return None;
+//    }
+//}
+//
+//fn recv_rtmsg(fd: RawFd) -> Result<NetworkInterface, DiscoverError> {
+//    let mut buf = [0u8; 8192];
+//    loop {
+//        let received = unsafe { recv(fd, buf.as_mut_ptr() as *mut c_void, buf.len(), 0) };
+//        if received < 0 {
+//            return Err(DiscoverError::SocketError {
+//                source: std::io::Error::last_os_error(),
+//            });
+//        }
+//        if received == 0 {
+//            break;
+//        }
+//
+//        let mut offset = 0usize;
+//
+//        while offset < received as usize {
+//            let hdr = unsafe { &*(buf[offset..].as_ptr() as *const nlmsghdr) };
+//            if hdr.nlmsg_type == NLMSG_DONE as u16 {
+//                return Ok(interfaces);
+//            }
+//            let msg_len = hdr.nlmsg_len as usize;
+//            if msg_len < mem::size_of::<nlmsghdr>() || offset + msg_len > buf.len() {
+//                break;
+//            }
+//
+//            let msg_end = offset + msg_len;
+//            let attrs_offset = offset + mem::size_of::<nlmsghdr>();
+//            let mut data_offset = attrs_offset + mem::size_of::<ifaddrmsg>();
+//            if data_offset > msg_end {
+//                break;
+//            }
+//            let addr_msg = unsafe { &*(buf[attrs_offset..].as_ptr() as *const ifaddrmsg) };
+//            if let Some(iface) = parse_rtaattr_data(addr_msg, &buf, &mut data_offset, msg_end) {
+//                return Ok(iface);
+//            }
+//            offset += (msg_len + 3) & !3;
+//        }
+//    }
+//    Err(DiscoverError::NetworkInterfaceNotFound {
+//        iface: "local".to_string(),
+//    })
+//}
 
 fn send_rtmsg(fd: RawFd, addr_msg: ifaddrmsg, nlh: nlmsghdr) -> Result<(), DiscoverError> {
     unsafe {
@@ -367,13 +357,51 @@ pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     while !curr.is_null() {
         let addr_info = unsafe { &*curr };
         if let Some(ip) = parse_addr_info(addr_info.ai_addr) {
+            unsafe {
+                freeaddrinfo(res);
+            }
             return Ok(ip);
         }
         curr = addr_info.ai_next;
     }
+    unsafe {
+        freeaddrinfo(res);
+    }
     Err(DiscoverError::NetworkInterfaceNotFound {
         iface: String::from("default"),
     })
+}
+
+fn getaddr_netmask(ip: Ipv4Addr) -> Option<u8> {
+    let mut ifap: *mut ifaddrs = std::ptr::null_mut();
+    let ret = unsafe { getifaddrs(&mut ifap) };
+    // TODO: Error handling
+    let mut curr = ifap;
+    while !curr.is_null() {
+        let addr_info = unsafe { &*curr };
+        let sockaddr: *const sockaddr = addr_info.ifa_addr;
+        if let Some(if_ip) = parse_addr_info(sockaddr) {
+            if if_ip == ip {
+                let netmask_addr = addr_info.ifa_netmask;
+                let netmask_addrin: sockaddr_in = unsafe { *(netmask_addr as *const sockaddr_in) };
+                let mut netmask_bits = netmask_addrin.sin_addr.s_addr;
+                let mut mask = 0u8;
+                for _ in 0..32 {
+                    mask += (netmask_bits & 1) as u8;
+                    netmask_bits = netmask_bits >> 1;
+                }
+                unsafe {
+                    freeifaddrs(ifap);
+                }
+                return Some(mask);
+            }
+        }
+        curr = addr_info.ifa_next;
+    }
+    unsafe {
+        freeifaddrs(ifap);
+    }
+    None
 }
 
 fn parse_addr_info(sockaddr: *const sockaddr) -> Option<Ipv4Addr> {
