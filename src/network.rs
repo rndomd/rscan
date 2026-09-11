@@ -5,7 +5,7 @@ use libc::{
     socket, socklen_t, suseconds_t, time_t, timeval,
 };
 use std::{
-    ffi::{CStr, c_char},
+    ffi::c_char,
     mem,
     net::{IpAddr, Ipv4Addr},
     os::{
@@ -237,7 +237,6 @@ fn getaddr_netmask(ip: Ipv4Addr) -> Result<u8, DiscoverError> {
             details: String::from("getifaddrs error"),
         });
     }
-    // TODO: Error handling
     let mut curr = ifap;
     while !curr.is_null() {
         let addr_info = unsafe { &*curr };
