@@ -22,7 +22,6 @@ pub fn get_netw_addr() -> Result<NetworkInterface> {
     let ntwif_ip = getaddr().context("failed to retrieve local ipv4 address")?;
     let netmask = getaddr_netmask(ntwif_ip)
         .with_context(|| format!("failed to fetch netmask for address {ntwif_ip}"))?;
-    println!("{ntwif_ip} {netmask}");
     Ok(NetworkInterface {
         ip: ntwif_ip,
         subnet: Subnet::new(IpAddr::V4(ntwif_ip), netmask),
@@ -195,8 +194,9 @@ pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     let mut name = [0 as c_char; 256];
     let ret = unsafe { gethostname(name.as_mut_ptr(), name.len()) };
     if ret != 0 {
-        return Err(DiscoverError::FailedToResolveHostname {
-            hostname: String::from("local"),
+        return Err(DiscoverError::KernelError {
+            source: std::io::Error::last_os_error(),
+            details: String::from("gethostname error"),
         });
     }
     let mut hints: addrinfo = unsafe { mem::zeroed() };
@@ -206,8 +206,9 @@ pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     let mut res: *mut addrinfo = std::ptr::null_mut();
     let ret = unsafe { getaddrinfo(name.as_ptr(), std::ptr::null(), &hints, &mut res) };
     if ret != 0 {
-        return Err(DiscoverError::NetworkInterfaceNotFound {
-            iface: unsafe { String::from(CStr::from_ptr(name.as_ptr()).to_string_lossy()) },
+        return Err(DiscoverError::KernelError {
+            source: std::io::Error::last_os_error(),
+            details: String::from("getaddrinfo error"),
         });
     }
     let mut curr = res;
@@ -224,14 +225,18 @@ pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     unsafe {
         freeaddrinfo(res);
     }
-    Err(DiscoverError::NetworkInterfaceNotFound {
-        iface: String::from("default"),
-    })
+    Err(DiscoverError::NetworkInterfaceNotFound)
 }
 
-fn getaddr_netmask(ip: Ipv4Addr) -> Option<u8> {
+fn getaddr_netmask(ip: Ipv4Addr) -> Result<u8, DiscoverError> {
     let mut ifap: *mut ifaddrs = std::ptr::null_mut();
     let ret = unsafe { getifaddrs(&mut ifap) };
+    if ret < 0 {
+        return Err(DiscoverError::KernelError {
+            source: std::io::Error::last_os_error(),
+            details: String::from("getifaddrs error"),
+        });
+    }
     // TODO: Error handling
     let mut curr = ifap;
     while !curr.is_null() {
@@ -239,8 +244,8 @@ fn getaddr_netmask(ip: Ipv4Addr) -> Option<u8> {
         let sockaddr: *const sockaddr = addr_info.ifa_addr;
         if let Some(if_ip) = parse_addr_info(sockaddr) {
             if if_ip == ip {
-                let netmask_addr = addr_info.ifa_netmask;
-                let netmask_addrin: sockaddr_in = unsafe { *(netmask_addr as *const sockaddr_in) };
+                let netmask_addrin: sockaddr_in =
+                    unsafe { *(addr_info.ifa_netmask as *const sockaddr_in) };
                 let mut netmask_bits = netmask_addrin.sin_addr.s_addr;
                 let mut mask = 0u8;
                 for _ in 0..32 {
@@ -250,7 +255,7 @@ fn getaddr_netmask(ip: Ipv4Addr) -> Option<u8> {
                 unsafe {
                     freeifaddrs(ifap);
                 }
-                return Some(mask);
+                return Ok(mask);
             }
         }
         curr = addr_info.ifa_next;
@@ -258,7 +263,7 @@ fn getaddr_netmask(ip: Ipv4Addr) -> Option<u8> {
     unsafe {
         freeifaddrs(ifap);
     }
-    None
+    Err(DiscoverError::NetworkInterfaceNotFound)
 }
 
 fn parse_addr_info(sockaddr: *const sockaddr) -> Option<Ipv4Addr> {

@@ -39,10 +39,14 @@ pub enum DiscoverError {
         #[source]
         source: std::io::Error,
     },
-    #[error("failed to find {iface} network interface")]
-    NetworkInterfaceNotFound { iface: String },
-    #[error("failed to resolve hostname {hostname}")]
-    FailedToResolveHostname { hostname: String },
+    #[error("failed to find network interface")]
+    NetworkInterfaceNotFound,
+    #[error("failed to communicate with kernel. {details}")]
+    KernelError {
+        #[source]
+        source: std::io::Error,
+        details: String
+    },
     #[error("failed to send message over socket of type: {sock_type}")]
     SendMessageError {
         sock_type: String,
