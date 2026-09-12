@@ -8,6 +8,7 @@ use thiserror::Error;
 
 pub struct Device {
     pub ip: String,
+    pub mac: String,
     pub device_type: String,
 }
 

@@ -9,6 +9,29 @@ pub fn scan_network(interface: String) -> Result<()> {
     pb.println(format!("{:<20} Device Type", "IP address"));
     if &interface == "default" {
         let iface = get_netw_addr().context("failed to get routing table")?;
+        for ip in iface.subnet.get_subnet_ips() {
+            if ip == iface.ip {
+                output_found_device(
+                    &pb,
+                    &Device {
+                        ip: iface.ip.to_string(),
+                        mac: String::new(),
+                        device_type: String::new(),
+                    },
+                );
+            } else {
+                if let Ok(Some(found)) = ping_local_ip(ip) {
+                    output_found_device(
+                        &pb,
+                        &Device {
+                            ip: found.to_string(),
+                            mac: String::new(),
+                            device_type: String::new(),
+                        },
+                    );
+                }
+            }
+        }
     }
     end_progress_bar(pb);
     Ok(())
