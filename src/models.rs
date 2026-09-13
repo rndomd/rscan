@@ -46,17 +46,13 @@ pub enum DiscoverError {
     KernelError {
         #[source]
         source: std::io::Error,
-        details: String
+        details: String,
     },
     #[error("failed to send message over socket of type: {sock_type}")]
     SendMessageError {
         sock_type: String,
         #[source]
         source: std::io::Error,
-    },
-    #[error("received invalid message. details: {details}")]
-    RecvInvalidMessage{
-        details: String,
     },
 }
 
@@ -124,7 +120,7 @@ impl Subnet {
         let mut res = Vec::new();
         if let IpAddr::V4(ip) = self.ip {
             let possibles_addrs = 2u32.pow((32 - self.mask) as u32);
-            for i in 1..possibles_addrs-1 {
+            for i in 1..possibles_addrs - 1 {
                 let addr = (ip.to_bits() + i).to_be_bytes();
                 res.push(Ipv4Addr::new(addr[0], addr[1], addr[2], addr[3]));
             }

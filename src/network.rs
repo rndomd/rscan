@@ -1,8 +1,8 @@
 use libc::{
-    AF_INET, AF_NETLINK, AF_UNSPEC, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET,
-    addrinfo, bind, freeaddrinfo, freeifaddrs, getaddrinfo, gethostname, getifaddrs, getpid,
-    ifaddrs, recvfrom, sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_nl, sockaddr_storage,
-    socket, socklen_t, suseconds_t, time_t, timeval,
+    AF_INET, AF_UNSPEC, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET, addrinfo,
+    freeaddrinfo, freeifaddrs, getaddrinfo, gethostname, getifaddrs, ifaddrs, recvfrom, sendto,
+    setsockopt, sockaddr, sockaddr_in, sockaddr_storage, socket, socklen_t, suseconds_t, time_t,
+    timeval,
 };
 use std::{
     ffi::c_char,
@@ -45,25 +45,6 @@ fn open_socket(domain: c_int, sock_type: c_int, protocol: c_int) -> Result<Owned
     }
 
     Ok(unsafe { OwnedFd::from_raw_fd(sockfd_nl) })
-}
-
-fn bind_socket(sockfd: RawFd, saddr: *const sockaddr) -> Result<(), DiscoverError> {
-    unsafe {
-        if bind(sockfd, saddr, mem::size_of::<sockaddr_nl>() as socklen_t) < 0 {
-            return Err(DiscoverError::SocketError {
-                source: std::io::Error::last_os_error(),
-            });
-        }
-        Ok(())
-    }
-}
-
-fn create_nl_sockaddr() -> sockaddr_nl {
-    let mut saddr: sockaddr_nl = unsafe { mem::zeroed() };
-    saddr.nl_pid = unsafe { getpid() as u32 };
-    saddr.nl_family = AF_NETLINK as u16;
-    saddr.nl_groups = 0;
-    saddr
 }
 
 fn recv_ping(sockfd: RawFd) -> Result<Option<Ipv4Addr>, DiscoverError> {
