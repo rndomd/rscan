@@ -1,11 +1,11 @@
 use libc::{
-    AF_INET, AF_UNSPEC, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET, addrinfo,
-    freeaddrinfo, freeifaddrs, getaddrinfo, gethostname, getifaddrs, ifaddrs, recvfrom, sendto,
-    setsockopt, sockaddr, sockaddr_in, sockaddr_storage, socket, socklen_t, suseconds_t, time_t,
-    timeval,
+    AF_INET, AF_PACKET, AF_UNSPEC, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET,
+    addrinfo, freeaddrinfo, freeifaddrs, getaddrinfo, gethostname, getifaddrs, ifaddrs, recvfrom,
+    sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_storage, socket, socklen_t,
+    suseconds_t, time_t, timeval,
 };
 use std::{
-    ffi::c_char,
+    ffi::{CStr, c_char},
     mem,
     net::{IpAddr, Ipv4Addr},
     os::{
@@ -15,15 +15,17 @@ use std::{
     time::Duration,
 };
 
-use crate::models::{DiscoverError, NetworkInterface, Subnet, icmphdr};
+use crate::models::{DiscoverError, MacAddress, NetworkInterface, Subnet, icmphdr};
 use anyhow::{Context, Result};
 
 pub fn get_netw_addr() -> Result<NetworkInterface> {
     let ntwif_ip = getaddr().context("failed to retrieve local ipv4 address")?;
     let netmask = getaddr_netmask(ntwif_ip)
         .with_context(|| format!("failed to fetch netmask for address {ntwif_ip}"))?;
+    let mac = getmacaddr().context("failed to retrieve local mac address")?;
     Ok(NetworkInterface {
         ip: ntwif_ip,
+        mac,
         subnet: Subnet::new(IpAddr::V4(ntwif_ip), netmask),
     })
 }
@@ -171,7 +173,7 @@ fn create_icmp_ping_message() -> icmphdr {
     hdr
 }
 
-pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
+fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     let mut name = [0 as c_char; 256];
     let ret = unsafe { gethostname(name.as_mut_ptr(), name.len()) };
     if ret != 0 {
@@ -181,7 +183,7 @@ pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
         });
     }
     let mut hints: addrinfo = unsafe { mem::zeroed() };
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET; // TEST with AF_INET and AF_PACKET
     hints.ai_socktype = SOCK_STREAM;
 
     let mut res: *mut addrinfo = std::ptr::null_mut();
@@ -196,9 +198,7 @@ pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     while !curr.is_null() {
         let addr_info = unsafe { &*curr };
         if let Some(ip) = parse_addr_info(addr_info.ai_addr) {
-            unsafe {
-                freeaddrinfo(res);
-            }
+            unsafe { freeaddrinfo(res); }
             return Ok(ip);
         }
         curr = addr_info.ai_next;
@@ -206,6 +206,10 @@ pub fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     unsafe {
         freeaddrinfo(res);
     }
+    Err(DiscoverError::NetworkInterfaceNotFound)
+}
+
+fn getmacaddr() -> Result<MacAddress, DiscoverError> {
     Err(DiscoverError::NetworkInterfaceNotFound)
 }
 
@@ -226,12 +230,8 @@ fn getaddr_netmask(ip: Ipv4Addr) -> Result<u8, DiscoverError> {
             if if_ip == ip {
                 let netmask_addrin: sockaddr_in =
                     unsafe { *(addr_info.ifa_netmask as *const sockaddr_in) };
-                let mut netmask_bits = netmask_addrin.sin_addr.s_addr;
-                let mut mask = 0u8;
-                for _ in 0..32 {
-                    mask += (netmask_bits & 1) as u8;
-                    netmask_bits = netmask_bits >> 1;
-                }
+                let netmask_bits = netmask_addrin.sin_addr.s_addr;
+                let mask = netmask_bits.count_ones() as u8;
                 unsafe {
                     freeifaddrs(ifap);
                 }
@@ -251,10 +251,10 @@ fn parse_addr_info(sockaddr: *const sockaddr) -> Option<Ipv4Addr> {
     match family {
         AF_INET => {
             let sockaddr_in: sockaddr_in = unsafe { *(sockaddr as *const sockaddr_in) };
-            let ip = Ipv4Addr::from_bits(u32::from_be(sockaddr_in.sin_addr.s_addr));
-            Some(ip)
+            Some(Ipv4Addr::from_bits(u32::from_be(
+                sockaddr_in.sin_addr.s_addr,
+            )))
         }
-
         _ => None,
     }
 }

@@ -30,7 +30,13 @@ pub struct Subnet {
 #[derive(Debug, PartialEq)]
 pub struct NetworkInterface {
     pub ip: Ipv4Addr,
+    pub mac: MacAddress,
     pub subnet: Subnet,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct MacAddress {
+    addr: [u8; 6]
 }
 
 #[derive(Debug, Error)]
