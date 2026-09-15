@@ -36,7 +36,7 @@ pub struct NetworkInterface {
 
 #[derive(Debug, PartialEq)]
 pub struct MacAddress {
-    addr: [u8; 6]
+    pub addr: [u8; 6]
 }
 
 #[derive(Debug, Error)]

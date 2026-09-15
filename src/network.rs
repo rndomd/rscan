@@ -20,9 +20,8 @@ use anyhow::{Context, Result};
 
 pub fn get_netw_addr() -> Result<NetworkInterface> {
     let ntwif_ip = getaddr().context("failed to retrieve local ipv4 address")?;
-    let netmask = getaddr_netmask(ntwif_ip)
-        .with_context(|| format!("failed to fetch netmask for address {ntwif_ip}"))?;
-    let mac = getmacaddr().context("failed to retrieve local mac address")?;
+    let (mac, netmask) = getaddr_details(ntwif_ip)
+        .with_context(|| format!("failed to fetch netmask and mac address for network interface {ntwif_ip}"))?;
     Ok(NetworkInterface {
         ip: ntwif_ip,
         mac,
@@ -198,7 +197,9 @@ fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     while !curr.is_null() {
         let addr_info = unsafe { &*curr };
         if let Some(ip) = parse_addr_info(addr_info.ai_addr) {
-            unsafe { freeaddrinfo(res); }
+            unsafe {
+                freeaddrinfo(res);
+            }
             return Ok(ip);
         }
         curr = addr_info.ai_next;
@@ -209,11 +210,7 @@ fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     Err(DiscoverError::NetworkInterfaceNotFound)
 }
 
-fn getmacaddr() -> Result<MacAddress, DiscoverError> {
-    Err(DiscoverError::NetworkInterfaceNotFound)
-}
-
-fn getaddr_netmask(ip: Ipv4Addr) -> Result<u8, DiscoverError> {
+fn getaddr_details(ip: Ipv4Addr) -> Result<(MacAddress, u8), DiscoverError> {
     let mut ifap: *mut ifaddrs = std::ptr::null_mut();
     let ret = unsafe { getifaddrs(&mut ifap) };
     if ret < 0 {
@@ -223,6 +220,9 @@ fn getaddr_netmask(ip: Ipv4Addr) -> Result<u8, DiscoverError> {
         });
     }
     let mut curr = ifap;
+    let mut mask: u8 = 0;
+    let mut found_mask = false;
+    let mut ifname: Option<String> = None;
     while !curr.is_null() {
         let addr_info = unsafe { &*curr };
         let sockaddr: *const sockaddr = addr_info.ifa_addr;
@@ -231,17 +231,57 @@ fn getaddr_netmask(ip: Ipv4Addr) -> Result<u8, DiscoverError> {
                 let netmask_addrin: sockaddr_in =
                     unsafe { *(addr_info.ifa_netmask as *const sockaddr_in) };
                 let netmask_bits = netmask_addrin.sin_addr.s_addr;
-                let mask = netmask_bits.count_ones() as u8;
-                unsafe {
-                    freeifaddrs(ifap);
-                }
-                return Ok(mask);
+                mask = netmask_bits.count_ones() as u8;
+                found_mask = true;
+                ifname = Some(unsafe {
+                    CStr::from_ptr(addr_info.ifa_name)
+                        .to_string_lossy()
+                        .into_owned()
+                });
+                break;
             }
         }
         curr = addr_info.ifa_next;
     }
+
+    let found_ifname = match ifname {
+        Some(name) => name,
+        None => {
+            unsafe {
+                freeifaddrs(ifap);
+            }
+            return Err(DiscoverError::NetworkInterfaceNotFound);
+        }
+    };
+
+    let mut mac_bytes = [0u8; 6];
+    let mut found_mac = false;
+
+    curr = ifap;
+    while !curr.is_null() {
+        let addr_info = unsafe { &*curr };
+        if !addr_info.ifa_name.is_null() && !addr_info.ifa_addr.is_null() {
+            let curr_name = unsafe { CStr::from_ptr(addr_info.ifa_name) }.to_string_lossy();
+            if curr_name == found_ifname {
+                let family = unsafe { (*addr_info.ifa_addr).sa_family as i32 };
+                if family == AF_PACKET {
+                    let sll = unsafe { &*(addr_info.ifa_addr as *const sockaddr_ll) };
+                    if sll.sll_halen == 6 {
+                        mac_bytes.copy_from_slice(&sll.sll_addr[..6]);
+                        found_mac = true;
+                        break;
+                    }
+                }
+            }
+        }
+        curr = addr_info.ifa_next;
+    }
+
     unsafe {
         freeifaddrs(ifap);
+    }
+    if found_mac && found_mask {
+        return Ok((MacAddress { addr: mac_bytes }, mask));
     }
     Err(DiscoverError::NetworkInterfaceNotFound)
 }
