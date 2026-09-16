@@ -1,7 +1,8 @@
-use crate::models::Device;
+use crate::models::{Device, MacAddress};
 use crate::network::{get_netw_addr, ping_local_ip};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 pub fn scan_network(interface: String) -> Result<()> {
@@ -16,22 +17,13 @@ pub fn scan_network(interface: String) -> Result<()> {
             if ip == iface.ip {
                 output_found_device(
                     &pb,
-                    &Device {
-                        ip: iface.ip.to_string(),
-                        mac: String::from("hidden"),
-                        device_type: String::from("This PC"),
-                    },
+                        &iface.ip,
+                        &iface.mac,
+                        "This PC"
                 );
             } else {
                 if let Ok(Some(found)) = ping_local_ip(ip) {
-                    output_found_device(
-                        &pb,
-                        &Device {
-                            ip: found.to_string(),
-                            mac: String::from("unkown"),
-                            device_type: String::from("unkown"),
-                        },
-                    );
+                    output_found_device(&pb, &found, &MacAddress { addr: [0u8; 6] }, "unkown");
                 }
             }
         }
@@ -59,9 +51,6 @@ fn end_progress_bar(pb: ProgressBar) {
     println!("Scan complete \x1b[32m✓\x1b[0m");
 }
 
-fn output_found_device(spinner: &ProgressBar, device: &Device) {
-    spinner.println(format!(
-        "{:<20} {:<20} {}",
-        device.ip, device.mac, device.device_type
-    ));
+fn output_found_device(spinner: &ProgressBar, ip: &Ipv4Addr, mac: &MacAddress, device_type: &str) {
+    spinner.println(format!("{:<20} {:<20} {}", ip, mac, device_type));
 }

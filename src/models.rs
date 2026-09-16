@@ -8,7 +8,7 @@ use thiserror::Error;
 
 pub struct Device {
     pub ip: String,
-    pub mac: String,
+    pub mac: MacAddress,
     pub device_type: String,
 }
 
@@ -36,7 +36,7 @@ pub struct NetworkInterface {
 
 #[derive(Debug, PartialEq)]
 pub struct MacAddress {
-    pub addr: [u8; 6]
+    pub addr: [u8; 6],
 }
 
 #[derive(Debug, Error)]
@@ -138,5 +138,16 @@ impl Subnet {
 impl Display for Subnet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.ip, self.mask)
+    }
+}
+
+impl Display for MacAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [a, b, c, d, e, g] = self.addr;
+        let mac = format!("{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{g:02x}");
+        match f.width() {
+            Some(width) => write!(f, "{mac:<width$}"),
+            None => write!(f, "{mac}"),
+        }
     }
 }
