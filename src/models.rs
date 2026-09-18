@@ -4,6 +4,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use libc::{ARPHRD_ETHER, ARPOP_REQUEST, arphdr};
 use thiserror::Error;
 
 pub struct Device {
@@ -37,6 +38,16 @@ pub struct NetworkInterface {
 #[derive(Debug, PartialEq)]
 pub struct MacAddress {
     pub addr: [u8; 6],
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct arpreq {
+    pub arphdr: arphdr,
+    pub src_mac: [u8; 6],
+    pub src_ip: [u8; 4],
+    pub dst_mac: [u8; 6],
+    pub dst_ip: [u8; 4],
 }
 
 #[derive(Debug, Error)]
@@ -132,6 +143,43 @@ impl Subnet {
             }
         }
         res
+    }
+}
+
+impl arpreq {
+    pub const PROTO_IPV4: u16 = 0x0800;
+
+    pub fn request(src_mac: MacAddress, src_ip: Ipv4Addr, dst_ip: Ipv4Addr) -> Self {
+        let hdr = arphdr {
+            ar_hrd: ARPHRD_ETHER,
+            ar_pro: Self::PROTO_IPV4,
+            ar_hln: 6,
+            ar_pln: 4,
+            ar_op: ARPOP_REQUEST,
+        };
+        Self {
+            arphdr: hdr,
+            src_mac: src_mac.addr,
+            src_ip: src_ip.octets(),
+            dst_mac: [0u8; 6],
+            dst_ip: dst_ip.octets(),
+        }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 28] {
+        let mut out = [0u8; 28];
+
+        out[0..2].copy_from_slice(&self.arphdr.ar_hrd.to_be_bytes());
+        out[2..4].copy_from_slice(&self.arphdr.ar_pro.to_be_bytes());
+        out[4] = self.arphdr.ar_hln;
+        out[5] = self.arphdr.ar_pln;
+        out[6..8].copy_from_slice(&self.arphdr.ar_op.to_be_bytes());
+        out[8..14].copy_from_slice(&self.src_mac);
+        out[14..18].copy_from_slice(&self.src_ip);
+        out[18..24].copy_from_slice(&self.dst_mac);
+        out[24..28].copy_from_slice(&self.dst_ip);
+
+        out
     }
 }
 
