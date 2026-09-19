@@ -1,31 +1,34 @@
 use libc::{
-    AF_INET, AF_PACKET, AF_UNSPEC, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET,
-    addrinfo, freeaddrinfo, freeifaddrs, getaddrinfo, gethostname, getifaddrs, ifaddrs, recvfrom,
-    sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_storage, socket, socklen_t,
-    suseconds_t, time_t, timeval,
+    AF_INET, AF_PACKET, ARPHRD_ETHER, ETH_P_ARP, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM,
+    SOCK_STREAM, SOL_SOCKET, addrinfo, freeaddrinfo, freeifaddrs, getaddrinfo, gethostname,
+    getifaddrs, if_nametoindex, ifaddrs, recvfrom, sa_family_t, sendto, setsockopt, sockaddr,
+    sockaddr_in, sockaddr_ll, sockaddr_storage, socket, socklen_t, suseconds_t, time_t, timeval,
 };
 use std::{
-    ffi::{CStr, c_char},
+    ffi::{CStr, CString, c_char},
     mem,
     net::{IpAddr, Ipv4Addr},
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         raw::{c_int, c_void},
     },
+    str::FromStr,
     time::Duration,
 };
 
-use crate::models::{DiscoverError, MacAddress, NetworkInterface, Subnet, icmphdr};
+use crate::models::{DiscoverError, MacAddress, NetworkInterface, Subnet, arpreq, icmphdr};
 use anyhow::{Context, Result};
 
 pub fn get_netw_addr() -> Result<NetworkInterface> {
-    let ntwif_ip = getaddr().context("failed to retrieve local ipv4 address")?;
-    let (mac, netmask) = getaddr_details(ntwif_ip)
-        .with_context(|| format!("failed to fetch netmask and mac address for network interface {ntwif_ip}"))?;
+    let ip = getaddr().context("failed to retrieve local ipv4 address")?;
+    let (mac, netmask, ifname) = getaddr_details(ip).with_context(|| {
+        format!("failed to fetch netmask and mac address for network interface {ip}")
+    })?;
     Ok(NetworkInterface {
-        ip: ntwif_ip,
+        ifname,
+        ip,
         mac,
-        subnet: Subnet::new(IpAddr::V4(ntwif_ip), netmask),
+        subnet: Subnet::new(IpAddr::V4(ip), netmask),
     })
 }
 
@@ -210,7 +213,7 @@ fn getaddr() -> Result<Ipv4Addr, DiscoverError> {
     Err(DiscoverError::NetworkInterfaceNotFound)
 }
 
-fn getaddr_details(ip: Ipv4Addr) -> Result<(MacAddress, u8), DiscoverError> {
+fn getaddr_details(ip: Ipv4Addr) -> Result<(MacAddress, u8, String), DiscoverError> {
     let mut ifap: *mut ifaddrs = std::ptr::null_mut();
     let ret = unsafe { getifaddrs(&mut ifap) };
     if ret < 0 {
@@ -281,7 +284,7 @@ fn getaddr_details(ip: Ipv4Addr) -> Result<(MacAddress, u8), DiscoverError> {
         freeifaddrs(ifap);
     }
     if found_mac && found_mask {
-        return Ok((MacAddress { addr: mac_bytes }, mask));
+        return Ok((MacAddress { addr: mac_bytes }, mask, found_ifname));
     }
     Err(DiscoverError::NetworkInterfaceNotFound)
 }
@@ -297,4 +300,44 @@ fn parse_addr_info(sockaddr: *const sockaddr) -> Option<Ipv4Addr> {
         }
         _ => None,
     }
+}
+
+pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<()> {
+    let sockfd: OwnedFd =
+        open_socket(AF_PACKET, SOCK_DGRAM, ETH_P_ARP).context("failed to open arp socket")?;
+    let req = arpreq::request(&ntw_ifa.mac, &ntw_ifa.ip, dst_ip);
+    send_arp(sockfd.as_raw_fd(), req, &ntw_ifa.ifname).context("failed to send arp message")?;
+    Ok(())
+}
+
+pub fn send_arp(sockfd: RawFd, req: arpreq, ifname: &str) -> Result<(), DiscoverError> {
+    let c_ifname = CString::from_str(ifname).map_err(|e| DiscoverError::InternalError {
+        details: String::from("failed to convert interface name to CString"),
+    })?;
+    let mut dst: sockaddr_ll = unsafe { mem::zeroed() };
+    dst.sll_family = AF_PACKET as sa_family_t;
+    dst.sll_protocol = ETH_P_ARP as u16;
+    dst.sll_ifindex = unsafe { if_nametoindex(c_ifname.as_ptr()) as c_int };
+    dst.sll_hatype = ARPHRD_ETHER;
+    dst.sll_halen = 6;
+    dst.sll_addr[..6].copy_from_slice(&[0xff; 6]);
+    let req_bytes = req.to_bytes();
+    let ret = unsafe {
+        sendto(
+            sockfd,
+            req_bytes.as_ptr() as *const c_void,
+            28,
+            0,
+            &dst as *const sockaddr_ll as *const sockaddr,
+            mem::size_of::<sockaddr_ll>() as socklen_t,
+        )
+    };
+
+    if ret < 0 {
+        return Err(DiscoverError::SendMessageError {
+            sock_type: String::from("ARP"),
+            source: std::io::Error::last_os_error(),
+        });
+    }
+    Ok(())
 }

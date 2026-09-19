@@ -30,6 +30,7 @@ pub struct Subnet {
 
 #[derive(Debug, PartialEq)]
 pub struct NetworkInterface {
+    pub ifname: String,
     pub ip: Ipv4Addr,
     pub mac: MacAddress,
     pub subnet: Subnet,
@@ -71,6 +72,8 @@ pub enum DiscoverError {
         #[source]
         source: std::io::Error,
     },
+    #[error("internal error. details: {details}")]
+    InternalError { details: String },
 }
 
 impl Deref for icmphdr {
@@ -149,7 +152,7 @@ impl Subnet {
 impl arpreq {
     pub const PROTO_IPV4: u16 = 0x0800;
 
-    pub fn request(src_mac: MacAddress, src_ip: Ipv4Addr, dst_ip: Ipv4Addr) -> Self {
+    pub fn request(src_mac: &MacAddress, src_ip: &Ipv4Addr, dst_ip: Ipv4Addr) -> Self {
         let hdr = arphdr {
             ar_hrd: ARPHRD_ETHER,
             ar_pro: Self::PROTO_IPV4,
