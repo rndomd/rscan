@@ -184,6 +184,28 @@ impl arpreq {
 
         out
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+
+        let arphdr = arphdr {
+            ar_hrd: u16::from_be_bytes(bytes[0..2].try_into().ok()?),
+            ar_pro: u16::from_be_bytes(bytes[2..4].try_into().ok()?),
+            ar_hln: bytes[4],
+            ar_pln: bytes[5],
+            ar_op: u16::from_be_bytes(bytes[6..8].try_into().ok()?),
+        };
+
+        Some(Self {
+            arphdr,
+            src_mac: bytes[8..14].try_into().ok()?,
+            src_ip: bytes[14..18].try_into().ok()?,
+            dst_mac: bytes[18..24].try_into().ok()?,
+            dst_ip: bytes[24..28].try_into().ok()?,
+        })
+    }
 }
 
 impl Display for Subnet {
