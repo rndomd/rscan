@@ -18,7 +18,7 @@ pub fn scan_network(interface: String) -> Result<()> {
                 output_found_device(&pb, &iface.ip, &iface.mac, "This PC");
             } else {
                 if let Ok(found) = arp_scan(&iface, ip) {
-                    output_found_device(&pb, &Ipv4Addr::from_octets(found.src_ip), &MacAddress { addr: found.src_mac }, "unkown");
+                    output_found_device(&pb, &Ipv4Addr::from_octets(found.src_ip), &MacAddress { addr: found.src_mac }, "unknown");
                 }
             }
         }
