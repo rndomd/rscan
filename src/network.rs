@@ -310,15 +310,15 @@ fn parse_addr_info(sockaddr: *const sockaddr) -> Option<Ipv4Addr> {
     }
 }
 
-pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<()> {
+pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<arpreq> {
     let sockfd: OwnedFd =
         open_socket(AF_PACKET, SOCK_DGRAM, ETH_P_ARP.to_be() as c_int).context("failed to open arp socket")?;
     let saddr = create_arp_bind_addr();
     bind_socket(sockfd.as_raw_fd(), &saddr as *const sockaddr_ll as *const sockaddr).context("failed to bind socket")?;
     let req = arpreq::request(&ntw_ifa.mac, &ntw_ifa.ip, dst_ip);
     send_arp(sockfd.as_raw_fd(), req, &ntw_ifa.ifname).context("failed to send arp message")?;
-    let _ = recv_arp(sockfd.as_raw_fd()).context("failed to receive arp message")?;
-    Ok(())
+    let res = recv_arp(sockfd.as_raw_fd()).context("failed to receive arp message")?;
+    Ok(res)
 }
 
 pub fn send_arp(sockfd: RawFd, req: arpreq, ifname: &str) -> Result<(), DiscoverError> {
@@ -355,6 +355,7 @@ pub fn send_arp(sockfd: RawFd, req: arpreq, ifname: &str) -> Result<(), Discover
 
 fn recv_arp(sockfd: RawFd) -> Result<arpreq, DiscoverError> {
     let mut buf = [0u8; 128];
+    set_sock_timeout(sockfd, Duration::from_millis(250))?;
     loop {
         let ret = unsafe { recv(sockfd, buf.as_mut_ptr() as *mut c_void, buf.len(), 0) };
         if ret < 0 {

@@ -1,5 +1,5 @@
-use crate::models::{Device, MacAddress};
-use crate::network::{get_netw_addr, ping_local_ip};
+use crate::models::MacAddress;
+use crate::network::{arp_scan, get_netw_addr, ping_local_ip};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::net::Ipv4Addr;
@@ -15,15 +15,10 @@ pub fn scan_network(interface: String) -> Result<()> {
         let iface = get_netw_addr().context("failed to get routing table")?;
         for ip in iface.subnet.get_subnet_ips() {
             if ip == iface.ip {
-                output_found_device(
-                    &pb,
-                        &iface.ip,
-                        &iface.mac,
-                        "This PC"
-                );
+                output_found_device(&pb, &iface.ip, &iface.mac, "This PC");
             } else {
-                if let Ok(Some(found)) = ping_local_ip(ip) {
-                    output_found_device(&pb, &found, &MacAddress { addr: [0u8; 6] }, "unkown");
+                if let Ok(found) = arp_scan(&iface, ip) {
+                    output_found_device(&pb, &Ipv4Addr::from_octets(found.src_ip), &MacAddress { addr: found.src_mac }, "unkown");
                 }
             }
         }
