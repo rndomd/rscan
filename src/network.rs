@@ -1,8 +1,5 @@
 use libc::{
-    AF_INET, AF_PACKET, ARPHRD_ETHER, ETH_P_ARP, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM,
-    SOCK_STREAM, SOL_SOCKET, addrinfo, freeaddrinfo, freeifaddrs, getaddrinfo, gethostname,
-    getifaddrs, if_nametoindex, ifaddrs, recvfrom, sa_family_t, sendto, setsockopt, sockaddr,
-    sockaddr_in, sockaddr_ll, sockaddr_storage, socket, socklen_t, suseconds_t, time_t, timeval,
+    AF_INET, AF_PACKET, ARPHRD_ETHER, ETH_P_ARP, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET, addrinfo, bind, freeaddrinfo, freeifaddrs, getaddrinfo, gethostname, getifaddrs, if_nametoindex, ifaddrs, recv, recvfrom, sa_family_t, sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_nl, sockaddr_storage, socket, socklen_t, suseconds_t, time_t, timeval
 };
 use std::{
     ffi::{CStr, CString, c_char},
@@ -49,6 +46,17 @@ fn open_socket(domain: c_int, sock_type: c_int, protocol: c_int) -> Result<Owned
     }
 
     Ok(unsafe { OwnedFd::from_raw_fd(sockfd_nl) })
+}
+
+fn bind_socket(sockfd: RawFd, saddr: *const sockaddr) -> Result<(), DiscoverError> {
+    unsafe {
+        if bind(sockfd, saddr, mem::size_of::<sockaddr_ll>() as socklen_t) < 0 {
+            return Err(DiscoverError::SocketError {
+                source: std::io::Error::last_os_error(),
+            });
+        }
+        Ok(())
+    }
 }
 
 fn recv_ping(sockfd: RawFd) -> Result<Option<Ipv4Addr>, DiscoverError> {
@@ -304,19 +312,22 @@ fn parse_addr_info(sockaddr: *const sockaddr) -> Option<Ipv4Addr> {
 
 pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<()> {
     let sockfd: OwnedFd =
-        open_socket(AF_PACKET, SOCK_DGRAM, ETH_P_ARP).context("failed to open arp socket")?;
+        open_socket(AF_PACKET, SOCK_DGRAM, ETH_P_ARP.to_be() as c_int).context("failed to open arp socket")?;
+    let saddr = create_arp_bind_addr();
+    bind_socket(sockfd.as_raw_fd(), &saddr as *const sockaddr_ll as *const sockaddr).context("failed to bind socket")?;
     let req = arpreq::request(&ntw_ifa.mac, &ntw_ifa.ip, dst_ip);
     send_arp(sockfd.as_raw_fd(), req, &ntw_ifa.ifname).context("failed to send arp message")?;
+    let _ = recv_arp(sockfd.as_raw_fd()).context("failed to receive arp message")?;
     Ok(())
 }
 
 pub fn send_arp(sockfd: RawFd, req: arpreq, ifname: &str) -> Result<(), DiscoverError> {
-    let c_ifname = CString::from_str(ifname).map_err(|e| DiscoverError::InternalError {
+    let c_ifname = CString::from_str(ifname).map_err(|_| DiscoverError::InternalError {
         details: String::from("failed to convert interface name to CString"),
     })?;
     let mut dst: sockaddr_ll = unsafe { mem::zeroed() };
     dst.sll_family = AF_PACKET as sa_family_t;
-    dst.sll_protocol = ETH_P_ARP as u16;
+    dst.sll_protocol = (ETH_P_ARP as u16).to_be();
     dst.sll_ifindex = unsafe { if_nametoindex(c_ifname.as_ptr()) as c_int };
     dst.sll_hatype = ARPHRD_ETHER;
     dst.sll_halen = 6;
@@ -340,4 +351,33 @@ pub fn send_arp(sockfd: RawFd, req: arpreq, ifname: &str) -> Result<(), Discover
         });
     }
     Ok(())
+}
+
+fn recv_arp(sockfd: RawFd) -> Result<arpreq, DiscoverError> {
+    let mut buf = [0u8; 128];
+    loop {
+        let ret = unsafe { recv(sockfd, buf.as_mut_ptr() as *mut c_void, buf.len(), 0) };
+        if ret < 0 {
+            return Err(DiscoverError::SocketError {
+                source: std::io::Error::last_os_error(),
+            });
+        }
+
+        if ret == 0 {
+            continue;
+        }
+
+        let Some(arp) = arpreq::from_bytes(&buf[..ret as usize]) else {
+            continue;
+        };
+
+        return Ok(arp);
+    }
+}
+
+fn create_arp_bind_addr() -> sockaddr_ll {
+    let mut saddr: sockaddr_ll = unsafe { mem::zeroed() };
+    saddr.sll_family = AF_PACKET as u16;
+    saddr.sll_protocol = (ETH_P_ARP as u16).to_be();
+    saddr
 }
