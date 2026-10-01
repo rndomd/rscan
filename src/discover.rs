@@ -8,7 +8,7 @@ use std::time::Duration;
 pub fn scan_network(interface: String) -> Result<()> {
     let pb = progress_bar();
     pb.println(format!(
-        "{:<20} {:<20} Device Type",
+        "{:<20} {:<20} Hostname",
         "IP address", "MAC Address"
     ));
     if &interface == "default" {
@@ -17,8 +17,8 @@ pub fn scan_network(interface: String) -> Result<()> {
             if ip == iface.ip {
                 output_found_device(&pb, &iface.ip, &iface.mac, "This PC");
             } else {
-                if let Ok(found) = arp_scan(&iface, ip) {
-                    output_found_device(&pb, &Ipv4Addr::from_octets(found.src_ip), &MacAddress { addr: found.src_mac }, "unknown");
+                if let Ok((found, hostname)) = arp_scan(&iface, ip) {
+                    output_found_device(&pb, &Ipv4Addr::from_octets(found.src_ip), &MacAddress { addr: found.src_mac }, &hostname);
                 }
             }
         }

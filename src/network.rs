@@ -1,5 +1,9 @@
 use libc::{
-    AF_INET, AF_PACKET, ARPHRD_ETHER, ETH_P_ARP, IPPROTO_ICMP, SO_RCVTIMEO, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET, addrinfo, bind, freeaddrinfo, freeifaddrs, getaddrinfo, gethostname, getifaddrs, if_nametoindex, ifaddrs, recv, recvfrom, sa_family_t, sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_nl, sockaddr_storage, socket, socklen_t, suseconds_t, time_t, timeval
+    AF_INET, AF_PACKET, ARPHRD_ETHER, ETH_P_ARP, IPPROTO_ICMP, NI_NAMEREQD, SO_RCVTIMEO,
+    SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET, addrinfo, bind, freeaddrinfo, freeifaddrs, getaddrinfo,
+    gethostname, getifaddrs, getnameinfo, if_nametoindex, ifaddrs, recv, recvfrom, sa_family_t,
+    sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_nl, sockaddr_storage, socket,
+    socklen_t, suseconds_t, time_t, timeval,
 };
 use std::{
     ffi::{CStr, CString, c_char},
@@ -27,6 +31,22 @@ pub fn get_netw_addr() -> Result<NetworkInterface> {
         mac,
         subnet: Subnet::new(IpAddr::V4(ip), netmask),
     })
+}
+
+pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<(arpreq, String)> {
+    let sockfd: OwnedFd = open_socket(AF_PACKET, SOCK_DGRAM, ETH_P_ARP.to_be() as c_int)
+        .context("failed to open arp socket")?;
+    let saddr = create_arp_bind_addr();
+    bind_socket(
+        sockfd.as_raw_fd(),
+        &saddr as *const sockaddr_ll as *const sockaddr,
+    )
+    .context("failed to bind socket")?;
+    let req = arpreq::request(&ntw_ifa.mac, &ntw_ifa.ip, dst_ip);
+    send_arp(sockfd.as_raw_fd(), req, &ntw_ifa.ifname).context("failed to send arp message")?;
+    let res = recv_arp(sockfd.as_raw_fd()).context("failed to receive arp message")?;
+    let hostname = gethost(&dst_ip).context("failed to retrieve hostname")?;
+    Ok((res, hostname))
 }
 
 pub fn ping_local_ip(ip: Ipv4Addr) -> Result<Option<Ipv4Addr>, anyhow::Error> {
@@ -310,18 +330,7 @@ fn parse_addr_info(sockaddr: *const sockaddr) -> Option<Ipv4Addr> {
     }
 }
 
-pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<arpreq> {
-    let sockfd: OwnedFd =
-        open_socket(AF_PACKET, SOCK_DGRAM, ETH_P_ARP.to_be() as c_int).context("failed to open arp socket")?;
-    let saddr = create_arp_bind_addr();
-    bind_socket(sockfd.as_raw_fd(), &saddr as *const sockaddr_ll as *const sockaddr).context("failed to bind socket")?;
-    let req = arpreq::request(&ntw_ifa.mac, &ntw_ifa.ip, dst_ip);
-    send_arp(sockfd.as_raw_fd(), req, &ntw_ifa.ifname).context("failed to send arp message")?;
-    let res = recv_arp(sockfd.as_raw_fd()).context("failed to receive arp message")?;
-    Ok(res)
-}
-
-pub fn send_arp(sockfd: RawFd, req: arpreq, ifname: &str) -> Result<(), DiscoverError> {
+fn send_arp(sockfd: RawFd, req: arpreq, ifname: &str) -> Result<(), DiscoverError> {
     let c_ifname = CString::from_str(ifname).map_err(|_| DiscoverError::InternalError {
         details: String::from("failed to convert interface name to CString"),
     })?;
@@ -381,4 +390,34 @@ fn create_arp_bind_addr() -> sockaddr_ll {
     saddr.sll_family = AF_PACKET as u16;
     saddr.sll_protocol = (ETH_P_ARP as u16).to_be();
     saddr
+}
+
+fn gethost(ip: &Ipv4Addr) -> Result<String, DiscoverError> {
+    let mut buf = [0 as c_char; 128];
+    let mut sa: sockaddr_in = unsafe { mem::zeroed() };
+    sa.sin_family = AF_INET as u16;
+    sa.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
+    let ret = unsafe {
+        getnameinfo(
+            &sa as *const sockaddr_in as *const sockaddr,
+            mem::size_of::<sockaddr_in>() as socklen_t,
+            buf.as_mut_ptr(),
+            buf.len() as socklen_t,
+            std::ptr::null_mut(),
+            0,
+            NI_NAMEREQD,
+        )
+    };
+
+    if ret != 0 {
+        return Err(DiscoverError::KernelError {
+            source: std::io::Error::last_os_error(),
+            details: "failed to resolve hostname".to_string(),
+        });
+    }
+    Ok(unsafe {
+        CStr::from_ptr(buf.as_ptr())
+            .to_string_lossy()
+            .into_owned()
+    })
 }
