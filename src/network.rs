@@ -2,7 +2,7 @@ use libc::{
     AF_INET, AF_PACKET, ARPHRD_ETHER, ETH_P_ARP, IPPROTO_ICMP, NI_NAMEREQD, SO_RCVTIMEO,
     SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET, addrinfo, bind, freeaddrinfo, freeifaddrs, getaddrinfo,
     gethostname, getifaddrs, getnameinfo, if_nametoindex, ifaddrs, recv, recvfrom, sa_family_t,
-    sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_nl, sockaddr_storage, socket,
+    sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_storage, socket,
     socklen_t, suseconds_t, time_t, timeval,
 };
 use std::{
@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-use crate::models::{DiscoverError, MacAddress, NetworkInterface, Subnet, arpreq, icmphdr};
+use crate::models::{DiscoverError, MacAddress, NetworkInterface, Subnet, arpreq, _icmphdr};
 use anyhow::{Context, Result};
 
 pub fn get_netw_addr() -> Result<NetworkInterface> {
@@ -33,7 +33,7 @@ pub fn get_netw_addr() -> Result<NetworkInterface> {
     })
 }
 
-pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<(arpreq, String)> {
+pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<Option<(arpreq, String)>> {
     let sockfd: OwnedFd = open_socket(AF_PACKET, SOCK_DGRAM, ETH_P_ARP.to_be() as c_int)
         .context("failed to open arp socket")?;
     let saddr = create_arp_bind_addr();
@@ -44,17 +44,20 @@ pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<(arpreq,
     .context("failed to bind socket")?;
     let req = arpreq::request(&ntw_ifa.mac, &ntw_ifa.ip, dst_ip);
     send_arp(sockfd.as_raw_fd(), req, &ntw_ifa.ifname).context("failed to send arp message")?;
-    let res = recv_arp(sockfd.as_raw_fd()).context("failed to receive arp message")?;
-    let hostname = gethost(&dst_ip).context("failed to retrieve hostname")?;
-    Ok((res, hostname))
+    let Ok(res) = recv_arp(sockfd.as_raw_fd(), &dst_ip) else {
+        return Ok(None);
+    };
+
+    let hostname = gethost(&dst_ip);
+    Ok(Some((res, hostname)))
 }
 
-pub fn ping_local_ip(ip: Ipv4Addr) -> Result<Option<Ipv4Addr>, anyhow::Error> {
+pub fn _ping_local_ip(ip: Ipv4Addr) -> Result<Option<Ipv4Addr>, anyhow::Error> {
     let sockfd: OwnedFd =
         open_socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP).context("failed to open icmp socket")?;
-    let imsg = create_icmp_ping_message();
-    send_ping(sockfd.as_raw_fd(), imsg, ip).context("failed to send icmp message")?;
-    recv_ping(sockfd.as_raw_fd()).context("failed to retrieve ping reply")
+    let imsg = _create_icmp_ping_message();
+    _send_ping(sockfd.as_raw_fd(), imsg, ip).context("failed to send icmp message")?;
+    _recv_ping(sockfd.as_raw_fd()).context("failed to retrieve ping reply")
 }
 
 fn open_socket(domain: c_int, sock_type: c_int, protocol: c_int) -> Result<OwnedFd, DiscoverError> {
@@ -79,7 +82,7 @@ fn bind_socket(sockfd: RawFd, saddr: *const sockaddr) -> Result<(), DiscoverErro
     }
 }
 
-fn recv_ping(sockfd: RawFd) -> Result<Option<Ipv4Addr>, DiscoverError> {
+fn _recv_ping(sockfd: RawFd) -> Result<Option<Ipv4Addr>, DiscoverError> {
     let mut buf: [u8; 65535] = unsafe { mem::zeroed() };
     let mut addr: sockaddr_storage = unsafe { mem::zeroed() };
     let mut addr_len = mem::size_of::<sockaddr_storage>() as socklen_t;
@@ -121,7 +124,7 @@ fn recv_ping(sockfd: RawFd) -> Result<Option<Ipv4Addr>, DiscoverError> {
     Ok(None)
 }
 
-fn send_ping(sockfd: RawFd, msg: icmphdr, ip: Ipv4Addr) -> Result<(), DiscoverError> {
+fn _send_ping(sockfd: RawFd, msg: _icmphdr, ip: Ipv4Addr) -> Result<(), DiscoverError> {
     let mut dst: sockaddr_in = unsafe { mem::zeroed() };
     dst.sin_family = AF_INET as u16;
     dst.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
@@ -176,9 +179,9 @@ fn set_sock_timeout(fd: RawFd, timeout: Duration) -> Result<(), DiscoverError> {
     Ok(())
 }
 
-fn create_icmp_ping_message() -> icmphdr {
+fn _create_icmp_ping_message() -> _icmphdr {
     let mut checksum: u32 = 0;
-    let mut hdr = icmphdr {
+    let mut hdr = _icmphdr {
         icmp_type: 8u8,
         code: 0u8,
         checksum: 0u16,
@@ -362,7 +365,7 @@ fn send_arp(sockfd: RawFd, req: arpreq, ifname: &str) -> Result<(), DiscoverErro
     Ok(())
 }
 
-fn recv_arp(sockfd: RawFd) -> Result<arpreq, DiscoverError> {
+fn recv_arp(sockfd: RawFd, ip: &Ipv4Addr) -> Result<arpreq, DiscoverError> {
     let mut buf = [0u8; 128];
     set_sock_timeout(sockfd, Duration::from_millis(250))?;
     loop {
@@ -380,7 +383,9 @@ fn recv_arp(sockfd: RawFd) -> Result<arpreq, DiscoverError> {
         let Some(arp) = arpreq::from_bytes(&buf[..ret as usize]) else {
             continue;
         };
-
+        if arp.src_ip != ip.octets() {
+            continue;
+        }
         return Ok(arp);
     }
 }
@@ -392,11 +397,11 @@ fn create_arp_bind_addr() -> sockaddr_ll {
     saddr
 }
 
-fn gethost(ip: &Ipv4Addr) -> Result<String, DiscoverError> {
+fn gethost(ip: &Ipv4Addr) -> String {
     let mut buf = [0 as c_char; 128];
     let mut sa: sockaddr_in = unsafe { mem::zeroed() };
     sa.sin_family = AF_INET as u16;
-    sa.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
+    sa.sin_addr.s_addr = u32::from_be_bytes(ip.octets());
     let ret = unsafe {
         getnameinfo(
             &sa as *const sockaddr_in as *const sockaddr,
@@ -410,14 +415,8 @@ fn gethost(ip: &Ipv4Addr) -> Result<String, DiscoverError> {
     };
 
     if ret != 0 {
-        return Err(DiscoverError::KernelError {
-            source: std::io::Error::last_os_error(),
-            details: "failed to resolve hostname".to_string(),
-        });
+        return unsafe { std::ffi::CStr::from_ptr(libc::gai_strerror(ret)).to_string_lossy().into_owned().to_lowercase() };
+
     }
-    Ok(unsafe {
-        CStr::from_ptr(buf.as_ptr())
-            .to_string_lossy()
-            .into_owned()
-    })
+    unsafe { CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned() }
 }

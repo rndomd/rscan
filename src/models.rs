@@ -7,14 +7,8 @@ use std::{
 use libc::{ARPHRD_ETHER, ARPOP_REQUEST, arphdr};
 use thiserror::Error;
 
-pub struct Device {
-    pub ip: String,
-    pub mac: MacAddress,
-    pub device_type: String,
-}
-
 #[repr(C)]
-pub struct icmphdr {
+pub struct _icmphdr {
     pub icmp_type: u8,
     pub code: u8,
     pub checksum: u16,
@@ -76,25 +70,25 @@ pub enum DiscoverError {
     InternalError { details: String },
 }
 
-impl Deref for icmphdr {
+impl Deref for _icmphdr {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         unsafe {
             std::slice::from_raw_parts(
-                self as *const icmphdr as *const u8,
-                std::mem::size_of::<icmphdr>(),
+                self as *const _icmphdr as *const u8,
+                std::mem::size_of::<_icmphdr>(),
             )
         }
     }
 }
 
-impl DerefMut for icmphdr {
+impl DerefMut for _icmphdr {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
             std::slice::from_raw_parts_mut(
-                self as *mut icmphdr as *mut u8,
-                std::mem::size_of::<icmphdr>(),
+                self as *mut _icmphdr as *mut u8,
+                std::mem::size_of::<_icmphdr>(),
             )
         }
     }
