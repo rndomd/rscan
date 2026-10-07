@@ -22,13 +22,13 @@ pub struct icmphdr {
     pub seq: u16,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Subnet {
     pub ip: IpAddr,
     pub mask: u8,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct NetworkInterface {
     pub ifname: String,
     pub ip: Ipv4Addr,
@@ -36,7 +36,7 @@ pub struct NetworkInterface {
     pub subnet: Subnet,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct MacAddress {
     pub addr: [u8; 6],
 }

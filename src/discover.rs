@@ -1,8 +1,9 @@
 use crate::models::MacAddress;
-use crate::network::{arp_scan, get_netw_addr, ping_local_ip};
+use crate::network::{arp_scan, get_netw_addr};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::net::Ipv4Addr;
+use std::thread;
 use std::time::Duration;
 
 pub fn scan_network(interface: String) -> Result<()> {
@@ -13,14 +14,31 @@ pub fn scan_network(interface: String) -> Result<()> {
     ));
     if &interface == "default" {
         let iface = get_netw_addr().context("failed to get routing table")?;
+        let mut handles = Vec::new();
+
         for ip in iface.subnet.get_subnet_ips() {
             if ip == iface.ip {
                 output_found_device(&pb, &iface.ip, &iface.mac, "This PC");
-            } else {
-                if let Ok((found, hostname)) = arp_scan(&iface, ip) {
-                    output_found_device(&pb, &Ipv4Addr::from_octets(found.src_ip), &MacAddress { addr: found.src_mac }, &hostname);
-                }
+                continue;
             }
+            let iface = iface.clone();
+            let pb = pb.clone();
+            handles.push(thread::spawn(move || {
+                if let Ok((found, hostname)) = arp_scan(&iface, ip) {
+                    output_found_device(
+                        &pb,
+                        &Ipv4Addr::from_octets(found.src_ip),
+                        &MacAddress {
+                            addr: found.src_mac,
+                        },
+                        &hostname,
+                    );
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("scan thread panicked");
         }
     }
     end_progress_bar(pb);
