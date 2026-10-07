@@ -41,8 +41,7 @@ pub fn scan_network(interface: String) -> Result<()> {
         }
         for handle in handles {
             match handle.join() {
-                Ok(Ok(())) => {} //res.context("scan failed")?,
-                Ok(Err(err)) => eprintln!("{err:#}"),
+                Ok(res) => res.context("scan thread failed")?,
                 Err(panic) => eprintln!("scan thread panicked: {panic:?}"),
             }
         }
