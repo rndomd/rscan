@@ -23,22 +23,28 @@ pub fn scan_network(interface: String) -> Result<()> {
             }
             let iface = iface.clone();
             let pb = pb.clone();
-            handles.push(thread::spawn(move || {
-                if let Ok((found, hostname)) = arp_scan(&iface, ip) {
-                    output_found_device(
-                        &pb,
-                        &Ipv4Addr::from_octets(found.src_ip),
-                        &MacAddress {
-                            addr: found.src_mac,
-                        },
-                        &hostname,
-                    );
-                }
+            handles.push(thread::spawn(move || -> Result<()> {
+                let Some((found, hostname)) = arp_scan(&iface, ip)? else {
+                    return Ok(());
+                };
+
+                output_found_device(
+                    &pb,
+                    &Ipv4Addr::from_octets(found.src_ip),
+                    &MacAddress {
+                        addr: found.src_mac,
+                    },
+                    &hostname,
+                );
+                Ok(())
             }));
         }
-
         for handle in handles {
-            handle.join().expect("scan thread panicked");
+            match handle.join() {
+                Ok(Ok(())) => {} //res.context("scan failed")?,
+                Ok(Err(err)) => eprintln!("{err:#}"),
+                Err(panic) => eprintln!("scan thread panicked: {panic:?}"),
+            }
         }
     }
     end_progress_bar(pb);
