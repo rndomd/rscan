@@ -7,6 +7,13 @@ use std::{
 use libc::{ARPHRD_ETHER, ARPOP_REQUEST, arphdr};
 use thiserror::Error;
 
+#[derive(Debug)]
+pub struct FoundDevice {
+    pub ip: Ipv4Addr,
+    pub mac: MacAddress,
+    pub hostname: String
+}
+
 #[repr(C)]
 pub struct _icmphdr {
     pub icmp_type: u8,
