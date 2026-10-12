@@ -2,8 +2,8 @@ use libc::{
     AF_INET, AF_PACKET, ARPHRD_ETHER, ETH_P_ARP, IPPROTO_ICMP, NI_NAMEREQD, SO_RCVTIMEO,
     SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET, addrinfo, bind, freeaddrinfo, freeifaddrs, getaddrinfo,
     gethostname, getifaddrs, getnameinfo, if_nametoindex, ifaddrs, recv, recvfrom, sa_family_t,
-    sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_storage, socket,
-    socklen_t, suseconds_t, time_t, timeval,
+    sendto, setsockopt, sockaddr, sockaddr_in, sockaddr_ll, sockaddr_storage, socket, socklen_t,
+    suseconds_t, time_t, timeval,
 };
 use std::{
     ffi::{CStr, CString, c_char},
@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-use crate::models::{DiscoverError, MacAddress, NetworkInterface, Subnet, arpreq, _icmphdr};
+use crate::models::{_icmphdr, DiscoverError, MacAddress, NetworkInterface, Subnet, arpreq};
 use anyhow::{Context, Result};
 
 pub fn get_netw_addr() -> Result<NetworkInterface> {
@@ -33,7 +33,7 @@ pub fn get_netw_addr() -> Result<NetworkInterface> {
     })
 }
 
-pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<Option<(arpreq, String)>> {
+pub fn open_arp_socket() -> Result<OwnedFd> {
     let sockfd: OwnedFd = open_socket(AF_PACKET, SOCK_DGRAM, ETH_P_ARP.to_be() as c_int)
         .context("failed to open arp socket")?;
     let saddr = create_arp_bind_addr();
@@ -42,9 +42,13 @@ pub fn arp_scan(ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<Option<(
         &saddr as *const sockaddr_ll as *const sockaddr,
     )
     .context("failed to bind socket")?;
+    Ok(sockfd)
+}
+
+pub fn arp_scan(sockfd: RawFd, ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<Option<(arpreq, String)>> {
     let req = arpreq::request(&ntw_ifa.mac, &ntw_ifa.ip, dst_ip);
-    send_arp(sockfd.as_raw_fd(), req, &ntw_ifa.ifname).context("failed to send arp message")?;
-    let Ok(res) = recv_arp(sockfd.as_raw_fd(), &dst_ip) else {
+    send_arp(sockfd, req, &ntw_ifa.ifname).context("failed to send arp message")?;
+    let Ok(res) = recv_arp(sockfd, &dst_ip) else {
         return Ok(None);
     };
 
@@ -415,8 +419,12 @@ fn gethost(ip: &Ipv4Addr) -> String {
     };
 
     if ret != 0 {
-        return unsafe { std::ffi::CStr::from_ptr(libc::gai_strerror(ret)).to_string_lossy().into_owned().to_lowercase() };
-
+        return unsafe {
+            std::ffi::CStr::from_ptr(libc::gai_strerror(ret))
+                .to_string_lossy()
+                .into_owned()
+                .to_lowercase()
+        };
     }
     unsafe { CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned() }
 }
