@@ -1,18 +1,20 @@
 use crate::models::MacAddress;
-use crate::network::{arp_scan, get_netw_addr};
+use crate::network::{arp_scan, get_netw_addr, open_arp_socket};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::net::Ipv4Addr;
 use std::thread;
 use std::time::Duration;
 
-pub fn scan_network(interface: String) -> Result<()> {
+pub fn scan_network(interface: &str) -> Result<()> {
     let pb = progress_bar();
     pb.println(format!(
         "{:<20} {:<20} Hostname",
         "IP address", "MAC Address"
     ));
-    if &interface == "default" {
+
+    let sockfd = open_arp_socket()?;
+    if interface == "default" {
         let iface = get_netw_addr().context("failed to get routing table")?;
         let mut handles = Vec::new();
 
