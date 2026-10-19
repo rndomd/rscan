@@ -28,9 +28,8 @@ pub fn discover(_interface: &str) -> Result<()> {
                 let sock = socket.lock().unwrap();
                 match job {
                     Ok(ip) => {
-                        if let Some(found) = scan_network(sock.as_raw_fd(), &iface, ip) {
-                            result_tx.lock().unwrap().send(found).unwrap();
-                        }
+                        let res = scan_network(sock.as_raw_fd(), &iface, ip);
+                        result_tx.lock().unwrap().send(res).unwrap();
                     }
                     Err(_) => break,
                 }
@@ -47,11 +46,15 @@ pub fn discover(_interface: &str) -> Result<()> {
     drop(job_tx);
 
     for _ in 0..subnet_size {
-        if let Ok(mut found) = result_rx.recv() {
-            if found.ip == iface.ip {
-                found.hostname = "This PC".to_string();
+        match result_rx.recv() {
+            Ok(Some(mut found)) => {
+                if found.ip == iface.ip {
+                    found.hostname = "This PC".to_string();
+                }
+                print_found_devices(&pb, found);
             }
-            print_found_devices(&pb, found);
+            Ok(None) => continue,
+            Err(_) => break,
         }
     }
 
