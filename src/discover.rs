@@ -28,8 +28,22 @@ pub fn discover(_interface: &str) -> Result<()> {
                 let sock = socket.lock().unwrap();
                 match job {
                     Ok(ip) => {
-                        let res = scan_network(sock.as_raw_fd(), &iface, ip);
-                        result_tx.lock().unwrap().send(res).unwrap();
+                        if ip == iface.ip {
+                            result_tx
+                                .lock()
+                                .unwrap()
+                                .send(Some(FoundDevice {
+                                    ip,
+                                    mac: MacAddress {
+                                        addr: iface.mac.addr,
+                                    },
+                                    hostname: "This PC".to_string(),
+                                }))
+                                .unwrap();
+                        } else {
+                            let res = process_arp(sock.as_raw_fd(), &iface, ip);
+                            result_tx.lock().unwrap().send(res).unwrap();
+                        }
                     }
                     Err(_) => break,
                 }
@@ -47,10 +61,7 @@ pub fn discover(_interface: &str) -> Result<()> {
 
     for _ in 0..subnet_size {
         match result_rx.recv() {
-            Ok(Some(mut found)) => {
-                if found.ip == iface.ip {
-                    found.hostname = "This PC".to_string();
-                }
+            Ok(Some(found)) => {
                 print_found_devices(&pb, found);
             }
             Ok(None) => continue,
@@ -65,11 +76,7 @@ pub fn discover(_interface: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn scan_network(
-    sockfd: RawFd,
-    nw_iface: &NetworkInterface,
-    ip: Ipv4Addr,
-) -> Option<FoundDevice> {
+fn process_arp(sockfd: RawFd, nw_iface: &NetworkInterface, ip: Ipv4Addr) -> Option<FoundDevice> {
     if let Ok(Some((req, hostname))) = arp_scan(sockfd, nw_iface, ip) {
         let found = FoundDevice {
             ip: Ipv4Addr::from_octets(req.src_ip),
