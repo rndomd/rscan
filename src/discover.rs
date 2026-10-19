@@ -1,76 +1,80 @@
-use crate::models::MacAddress;
+use crate::models::{FoundDevice, MacAddress, NetworkInterface};
 use crate::network::{arp_scan, get_netw_addr, open_arp_socket};
+use crate::ui::{init_scan_ui, print_found_devices};
 use anyhow::{Context, Result};
-use indicatif::{ProgressBar, ProgressStyle};
 use std::net::Ipv4Addr;
+use std::os::fd::{AsRawFd, RawFd};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
-pub fn scan_network(interface: &str) -> Result<()> {
-    let pb = progress_bar();
-    pb.println(format!(
-        "{:<20} {:<20} Hostname",
-        "IP address", "MAC Address"
-    ));
-
-    let sockfd = open_arp_socket()?;
-    if interface == "default" {
-        let iface = get_netw_addr().context("failed to get routing table")?;
-        let mut handles = Vec::new();
-
-        for ip in iface.subnet.get_subnet_ips() {
-            if ip == iface.ip {
-                output_found_device(&pb, &iface.ip, &iface.mac, "This PC");
-                continue;
+pub fn discover(_interface: &str) -> Result<()> {
+    let pb = init_scan_ui();
+    let (job_tx, job_rx) = channel();
+    let (result_tx, result_rx) = channel();
+    let job_rx = Arc::new(Mutex::new(job_rx));
+    let result_tx = Arc::new(Mutex::new(result_tx));
+    let sockfd = Arc::new(Mutex::new(open_arp_socket()?));
+    let iface = get_netw_addr().context("failed to get routing table")?;
+    let mut handles = vec![];
+    for _ in 0..10 {
+        let job_rx = Arc::clone(&job_rx);
+        let result_tx = Arc::clone(&result_tx);
+        let socket = Arc::clone(&sockfd);
+        let iface = iface.clone();
+        handles.push(thread::spawn(move || {
+            loop {
+                let job = job_rx.lock().unwrap().recv();
+                let sock = socket.lock().unwrap();
+                match job {
+                    Ok(ip) => {
+                        if let Some(found) = scan_network(sock.as_raw_fd(), &iface, ip) {
+                            result_tx.lock().unwrap().send(found).unwrap();
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
-            let iface = iface.clone();
-            let pb = pb.clone();
-            handles.push(thread::spawn(move || -> Result<()> {
-                let Some((found, hostname)) = arp_scan(&iface, ip)? else {
-                    return Ok(());
-                };
+        }));
+    }
 
-                output_found_device(
-                    &pb,
-                    &Ipv4Addr::from_octets(found.src_ip),
-                    &MacAddress {
-                        addr: found.src_mac,
-                    },
-                    &hostname,
-                );
-                Ok(())
-            }));
-        }
-        for handle in handles {
-            match handle.join() {
-                Ok(res) => res.context("scan thread failed")?,
-                Err(panic) => eprintln!("scan thread panicked: {panic:?}"),
+    let ips = iface.subnet.get_subnet_ips();
+    let subnet_size = ips.len();
+
+    for ip in ips {
+        job_tx.send(ip).unwrap();
+    }
+    drop(job_tx);
+
+    for _ in 0..subnet_size {
+        if let Ok(mut found) = result_rx.recv() {
+            if found.ip == iface.ip {
+                found.hostname = "This PC".to_string();
             }
+            print_found_devices(&pb, found);
         }
     }
-    end_progress_bar(pb);
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
     Ok(())
 }
 
-fn progress_bar() -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-
-    pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} {msg}")
-            .unwrap()
-            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-    );
-
-    pb.enable_steady_tick(Duration::from_millis(80));
-    pb.set_message("Scanning network...");
-    pb
-}
-
-fn end_progress_bar(pb: ProgressBar) {
-    pb.finish_and_clear();
-    println!("Scan complete \x1b[32m✓\x1b[0m");
-}
-
-fn output_found_device(spinner: &ProgressBar, ip: &Ipv4Addr, mac: &MacAddress, device_type: &str) {
-    spinner.println(format!("{:<20} {:<20} {}", ip, mac, device_type));
+pub fn scan_network(
+    sockfd: RawFd,
+    nw_iface: &NetworkInterface,
+    ip: Ipv4Addr,
+) -> Option<FoundDevice> {
+    if let Ok(Some((req, hostname))) = arp_scan(sockfd, nw_iface, ip) {
+        let found = FoundDevice {
+            ip: Ipv4Addr::from_octets(req.src_ip),
+            mac: MacAddress { addr: req.src_mac },
+            hostname: hostname,
+        };
+        return Some(found);
+    } else {
+        None
+    }
 }

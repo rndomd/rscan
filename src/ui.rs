@@ -13,6 +13,10 @@ pub fn init_scan_ui() -> ProgressBar {
 
     pb.enable_steady_tick(Duration::from_millis(80));
     pb.set_message("Scanning network...");
+    pb.println(format!(
+        "{:<20} {:<20} Hostname",
+        "IP address", "MAC Address"
+    ));
     pb
 }
 
@@ -21,8 +25,9 @@ pub fn terminate_scan_ui(pb: ProgressBar) {
     println!("Scan complete \x1b[32m✓\x1b[0m");
 }
 
-pub fn print_found_devices(spinner: &ProgressBar, devices: Vec<FoundDevice>) {
-    for device in devices {
-        spinner.println(format!("{:<20} {:<20} {}", device.ip, device.mac, device.hostname));
-    }
+pub fn print_found_devices(spinner: &ProgressBar, device: FoundDevice) {
+    spinner.println(format!(
+        "{:<20} {:<20} {}",
+        device.ip, device.mac, device.hostname
+    ));
 }
