@@ -10,3 +10,4 @@ anyhow = "1.0"
 indicatif = "0.18"
 uuid = { version = "1.25", features = ["v4"] }
 libc = "0.2"
+rusqlite = "0.40.2"
