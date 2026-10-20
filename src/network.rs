@@ -45,7 +45,11 @@ pub fn open_arp_socket() -> Result<OwnedFd> {
     Ok(sockfd)
 }
 
-pub fn arp_scan(sockfd: RawFd, ntw_ifa: &NetworkInterface, dst_ip: Ipv4Addr) -> Result<Option<(arpreq, String)>> {
+pub fn arp_scan(
+    sockfd: RawFd,
+    ntw_ifa: &NetworkInterface,
+    dst_ip: Ipv4Addr,
+) -> Result<Option<(arpreq, String)>> {
     let req = arpreq::request(&ntw_ifa.mac, &ntw_ifa.ip, dst_ip);
     send_arp(sockfd, req, &ntw_ifa.ifname).context("failed to send arp message")?;
     let Ok(res) = recv_arp(sockfd, &dst_ip) else {
