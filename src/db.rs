@@ -2,22 +2,28 @@ use std::{collections::HashMap, fs::read_to_string};
 
 use anyhow::{Context, Result};
 
-static MA_L: &str = "../db/ma-l.csv";
-static MA_M: &str = "../db/ma-m.csv";
-static MA_S: &str = "../db/ma-s.csv";
+static MA_L: &str = "./db/ma-l.csv";
+static MA_M: &str = "./db/ma-m.csv";
+static MA_S: &str = "./db/ma-s.csv";
 
-pub fn init() -> Result<()> {
-    let mut mac_vendors: HashMap<String, Vec<String>> = HashMap::new();
+pub struct Database {
+    mac_vendors: HashMap<String, Vec<String>>,
+}
 
-    read_csv_to_db(MA_L, &mut mac_vendors).context("failed to insert into memory ma-l")?;
-    read_csv_to_db(MA_M, &mut mac_vendors).context("failed to insert into memory ma-m")?;
-    read_csv_to_db(MA_S, &mut mac_vendors).context("failed to insert into memory from ma-s")?;
+impl Database {
+    pub fn init() -> Result<Self> {
+        let mut mac_vendors: HashMap<String, Vec<String>> = HashMap::new();
 
-    Ok(())
+        read_csv_to_db(MA_L, &mut mac_vendors).context("failed to insert into memory from ma-l")?;
+        read_csv_to_db(MA_M, &mut mac_vendors).context("failed to insert into memory from ma-m")?;
+        read_csv_to_db(MA_S, &mut mac_vendors).context("failed to insert into memory from ma-s")?;
+
+        Ok(Self { mac_vendors })
+    }
 }
 
 fn read_csv_to_db(path: &str, mac_vendors: &mut HashMap<String, Vec<String>>) -> Result<()> {
-    let content = read_to_string(path).context("failed to find file")?;
+    let content = read_to_string(path).with_context(|| format!("failed to find file {}", path))?;
     content.lines().for_each(|line: &str| {
         let parts = line.split(",").collect::<Vec<_>>();
         let addr = parts[1].trim();
