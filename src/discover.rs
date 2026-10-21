@@ -1,3 +1,4 @@
+use crate::db::Database;
 use crate::models::{FoundDevice, MacAddress, NetworkInterface};
 use crate::network::{arp_scan, get_netw_addr, open_arp_socket};
 use crate::ui::{init_scan_ui, print_found_devices};
@@ -8,7 +9,7 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-pub fn discover(_interface: &str) -> Result<()> {
+pub fn discover(_interface: &str, db: Database) -> Result<()> {
     let pb = init_scan_ui();
     let (job_tx, job_rx) = channel();
     let (result_tx, result_rx) = channel();

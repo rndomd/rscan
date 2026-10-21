@@ -1,4 +1,5 @@
 mod cli;
+mod db;
 mod discover;
 mod fingerprint;
 mod models;
@@ -11,7 +12,15 @@ fn main() -> Result<()> {
     let cmd = cli::parse();
     match cmd {
         cli::Command::Discover { interface } => {
-            if let Err(error) = discover::discover(interface.as_str()) {
+            let db;
+            match db::Database::init() {
+                Ok(init_db) => db = init_db,
+                Err(error) => {
+                    print_error(&error);
+                    std::process::exit(1)
+                }
+            }
+            if let Err(error) = discover::discover(interface.as_str(), db) {
                 print_error(&error);
                 std::process::exit(1);
             }
