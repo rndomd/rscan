@@ -11,7 +11,8 @@ use thiserror::Error;
 pub struct FoundDevice {
     pub ip: Ipv4Addr,
     pub mac: MacAddress,
-    pub hostname: String
+    pub hostname: String,
+    pub vendor: String
 }
 
 #[repr(C)]
