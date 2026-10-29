@@ -23,7 +23,6 @@ pub fn discover(_interface: &str, db: Database) -> Result<()> {
         let result_tx = Arc::clone(&result_tx);
         let socket = Arc::clone(&sockfd);
         let iface = iface.clone();
-        let db = db.clone();
         handles.push(thread::spawn(move || {
             loop {
                 let job = job_rx.lock().unwrap().recv();
@@ -40,13 +39,11 @@ pub fn discover(_interface: &str, db: Database) -> Result<()> {
                                         addr: iface.mac.addr,
                                     },
                                     hostname: "This PC".to_string(),
-                                    vendor: db
-                                        .findByMacAddress(&iface.mac)
-                                        .unwrap_or("Not Found".to_string()),
+                                    vendor: "unknown".to_string(),
                                 }))
                                 .unwrap();
                         } else {
-                            let res = process_arp(sock.as_raw_fd(), &iface, ip, &db);
+                            let res = process_arp(sock.as_raw_fd(), &iface, ip);
                             result_tx.lock().unwrap().send(res).unwrap();
                         }
                     }
@@ -66,7 +63,11 @@ pub fn discover(_interface: &str, db: Database) -> Result<()> {
 
     for _ in 0..subnet_size {
         match result_rx.recv() {
-            Ok(Some(found)) => {
+            Ok(Some(mut found)) => {
+                let vendor = db
+                    .findByMacAddress(&iface.mac)
+                    .unwrap_or("Not Found".to_string());
+                found.vendor = vendor;
                 print_found_devices(&pb, found);
             }
             Ok(None) => continue,
@@ -82,20 +83,13 @@ pub fn discover(_interface: &str, db: Database) -> Result<()> {
     Ok(())
 }
 
-fn process_arp(
-    sockfd: RawFd,
-    nw_iface: &NetworkInterface,
-    ip: Ipv4Addr,
-    db: &Database,
-) -> Option<FoundDevice> {
+fn process_arp(sockfd: RawFd, nw_iface: &NetworkInterface, ip: Ipv4Addr) -> Option<FoundDevice> {
     if let Ok(Some((req, hostname))) = arp_scan(sockfd, nw_iface, ip) {
-        let mac = MacAddress { addr: req.src_mac };
-        let vendor = db.findByMacAddress(&mac).unwrap_or("Not Found".to_string());
         let found = FoundDevice {
             ip: Ipv4Addr::from_octets(req.src_ip),
-            mac,
+            mac: MacAddress { addr: req.src_mac },
             hostname: hostname,
-            vendor,
+            vendor: "unknown".to_string(),
         };
         return Some(found);
     } else {
